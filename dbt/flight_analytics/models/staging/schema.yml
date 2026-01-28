@@ -1,0 +1,87 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: "Bronze layer - raw flight data from MySQL staging"
+    schema: bronze
+    tables:
+      - name: raw_flight_data
+        description: "Raw flight booking data transferred from MySQL"
+        columns:
+          - name: id
+            description: "Primary key"
+          - name: airline
+            description: "Airline name"
+          - name: source_code
+            description: "Source airport code"
+          - name: source_name
+            description: "Source airport full name"
+          - name: destination_code
+            description: "Destination airport code"
+          - name: destination_name
+            description: "Destination airport full name"
+          - name: departure_datetime
+            description: "Departure date and time as string"
+          - name: arrival_datetime
+            description: "Arrival date and time as string"
+          - name: duration_hours
+            description: "Flight duration in hours"
+          - name: stopovers
+            description: "Number of stopovers"
+          - name: aircraft_type
+            description: "Type of aircraft"
+          - name: booking_class
+            description: "Booking class (Economy, Business, First Class)"
+          - name: booking_source
+            description: "Source of booking"
+          - name: base_fare_bdt
+            description: "Base fare in BDT"
+          - name: tax_surcharge_bdt
+            description: "Tax and surcharge in BDT"
+          - name: total_fare_bdt
+            description: "Total fare in BDT"
+          - name: seasonality
+            description: "Season type"
+          - name: days_before_departure
+            description: "Days before departure when booked"
+          - name: ingested_at
+            description: "Timestamp when data was ingested"
+
+models:
+  - name: stg_flight_bookings
+    description: "Cleaned and validated flight bookings from Bronze layer"
+    columns:
+      - name: bronze_id
+        description: "Original ID from Bronze layer"
+        tests:
+          - not_null
+      - name: airline
+        description: "Cleaned airline name"
+        tests:
+          - not_null
+      - name: source_code
+        description: "Source airport code"
+        tests:
+          - not_null
+      - name: destination_code
+        description: "Destination airport code"
+        tests:
+          - not_null
+      - name: total_fare_bdt
+        description: "Validated total fare"
+        tests:
+          - not_null
+
+  - name: stg_validation_failures
+    description: "Records that failed validation in Silver layer"
+    columns:
+      - name: bronze_id
+        description: "Original ID from Bronze layer"
+      - name: failure_reason
+        description: "Reason for validation failure"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['missing_airline', 'missing_source', 'missing_destination', 
+                       'negative_duration', 'excessive_duration', 'negative_base_fare', 
+                       'invalid_total_fare', 'unknown_failure']

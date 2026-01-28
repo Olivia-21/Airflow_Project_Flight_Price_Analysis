@@ -1,0 +1,87 @@
+version: 2
+
+models:
+  - name: kpi_avg_fare_by_airline
+    description: "KPI: Average fare statistics by airline"
+    columns:
+      - name: airline
+        description: "Airline name"
+        tests:
+          - unique
+          - not_null
+      - name: total_bookings
+        description: "Total number of bookings"
+        tests:
+          - not_null
+      - name: avg_total_fare_bdt
+        description: "Average total fare in BDT"
+        tests:
+          - not_null
+      - name: market_share_pct
+        description: "Market share percentage"
+        tests:
+          - not_null
+
+  - name: kpi_seasonal_fare_variation
+    description: "KPI: Fare comparison across peak and non-peak seasons"
+    columns:
+      - name: seasonality
+        description: "Season type from source data"
+        tests:
+          - not_null
+      - name: season_type
+        description: "Peak or Non-Peak classification"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Peak', 'Non-Peak']
+      - name: total_bookings
+        description: "Total bookings in this season"
+        tests:
+          - not_null
+      - name: avg_total_fare_bdt
+        description: "Average fare for the season"
+        tests:
+          - not_null
+
+  - name: kpi_booking_count_by_airline
+    description: "KPI: Booking counts by airline with breakdowns"
+    columns:
+      - name: airline
+        description: "Airline name"
+        tests:
+          - unique
+          - not_null
+      - name: total_bookings
+        description: "Total number of bookings"
+        tests:
+          - not_null
+      - name: booking_rank
+        description: "Rank by booking count"
+        tests:
+          - not_null
+      - name: market_share_pct
+        description: "Market share percentage"
+        tests:
+          - not_null
+
+  - name: kpi_most_popular_routes
+    description: "KPI: Most popular routes by booking count"
+    columns:
+      - name: route_code
+        description: "Route code (source-destination)"
+        tests:
+          - unique
+          - not_null
+      - name: total_bookings
+        description: "Total bookings on this route"
+        tests:
+          - not_null
+      - name: route_rank
+        description: "Rank by popularity"
+        tests:
+          - not_null
+      - name: avg_fare_bdt
+        description: "Average fare for the route"
+        tests:
+          - not_null

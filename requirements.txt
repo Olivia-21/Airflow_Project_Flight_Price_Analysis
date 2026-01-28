@@ -1,0 +1,9 @@
+# Python dependencies for Airflow
+astronomer-cosmos==1.7.1
+dbt-postgres==1.9.0
+mysql-connector-python==9.1.0
+pymysql==1.1.1
+pandas==2.2.3
+psycopg2-binary==2.9.10
+apache-airflow-providers-mysql==5.7.2
+apache-airflow-providers-postgres==5.13.1

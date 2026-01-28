@@ -1,0 +1,12 @@
+[core]
+load_examples = False
+executor = LocalExecutor
+test_connection = Enabled
+
+[database]
+sql_alchemy_pool_size = 5
+sql_alchemy_max_overflow = 10
+
+[webserver]
+expose_config = True
+rbac = True

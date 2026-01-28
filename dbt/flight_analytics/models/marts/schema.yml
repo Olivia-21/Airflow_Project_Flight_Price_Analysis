@@ -1,0 +1,101 @@
+version: 2
+
+models:
+  - name: dim_airline
+    description: "Airline dimension table with unique airlines"
+    columns:
+      - name: airline_key
+        description: "Surrogate key for airline"
+        tests:
+          - unique
+          - not_null
+      - name: airline_name
+        description: "Airline name"
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_route
+    description: "Route dimension table with source-destination pairs"
+    columns:
+      - name: route_key
+        description: "Surrogate key for route"
+        tests:
+          - unique
+          - not_null
+      - name: source_code
+        description: "Source airport code"
+        tests:
+          - not_null
+      - name: destination_code
+        description: "Destination airport code"
+        tests:
+          - not_null
+      - name: route_code
+        description: "Combined route code (source-destination)"
+        tests:
+          - unique
+          - not_null
+
+  - name: dim_date
+    description: "Date dimension derived from departure dates"
+    columns:
+      - name: date_key
+        description: "Date key in YYYYMMDD format"
+        tests:
+          - unique
+          - not_null
+      - name: full_date
+        description: "Full date"
+        tests:
+          - unique
+          - not_null
+      - name: year
+        description: "Year"
+        tests:
+          - not_null
+      - name: month
+        description: "Month (1-12)"
+        tests:
+          - not_null
+      - name: quarter
+        description: "Quarter (1-4)"
+        tests:
+          - not_null
+          - accepted_values:
+              values: [1, 2, 3, 4]
+
+  - name: fct_flight_bookings
+    description: "Central fact table for flight bookings"
+    columns:
+      - name: booking_id
+        description: "Unique booking identifier"
+        tests:
+          - unique
+          - not_null
+      - name: airline_key
+        description: "Foreign key to dim_airline"
+        tests:
+          - relationships:
+              to: ref('dim_airline')
+              field: airline_key
+      - name: route_key
+        description: "Foreign key to dim_route"
+        tests:
+          - relationships:
+              to: ref('dim_route')
+              field: route_key
+      - name: date_key
+        description: "Foreign key to dim_date"
+        tests:
+          - relationships:
+              to: ref('dim_date')
+              field: date_key
+      - name: total_fare_bdt
+        description: "Total fare in BDT"
+        tests:
+          - not_null
+      - name: duration_hours
+        description: "Flight duration in hours"
+        tests:
+          - not_null

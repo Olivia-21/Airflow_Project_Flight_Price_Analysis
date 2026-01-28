@@ -1,0 +1,48 @@
+name: 'flight_analytics'
+version: '1.0.0'
+config-version: 2
+
+profile: 'flight_analytics'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Model configurations
+models:
+  flight_analytics:
+    # Staging models - Silver layer validation
+    staging:
+      +materialized: view
+      +schema: silver
+      +tags: ['staging', 'silver']
+    
+    # Marts models - Silver layer dimensions and facts
+    marts:
+      +materialized: table
+      +schema: silver
+      +tags: ['marts', 'silver']
+    
+    # KPI models - Gold layer analytics
+    kpis:
+      +materialized: table
+      +schema: gold
+      +tags: ['kpis', 'gold']
+
+# Variable definitions
+vars:
+  # Peak seasons for Bangladesh
+  peak_seasons: ['Eid ul-Fitr', 'Eid ul-Adha', 'Winter Holidays']
+  
+  # Minimum fare threshold for validation
+  min_fare_threshold: 0
+  
+  # Maximum duration threshold (hours)
+  max_duration_threshold: 48
