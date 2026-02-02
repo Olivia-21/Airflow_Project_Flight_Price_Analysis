@@ -2,7 +2,7 @@
 
 An end-to-end data pipeline for analyzing Bangladesh flight prices using **Apache Airflow**, **dbt**, **MySQL**, **PostgreSQL**, and **Docker**.
 
-## 🏗️ Architecture
+##  Architecture
 
 This project implements the **Medallion Architecture** (Bronze → Silver → Gold) for progressive data quality:
 
@@ -26,12 +26,12 @@ This project implements the **Medallion Architecture** (Bronze → Silver → Go
 | **Silver** | PostgreSQL | Clean data with dimensions and fact tables |
 | **Gold** | PostgreSQL | Business KPIs and analytics |
 
-## 📋 Prerequisites
+##  Prerequisites
 
 - **Docker Desktop** (with WSL2 on Windows)
 - **Git** (optional, for version control)
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### 1. Start Docker Containers
 
@@ -99,7 +99,7 @@ Airflow_Flight_Price_Analysis/
 └── README.md
 ```
 
-## 🔄 Pipeline Tasks (5 Tasks)
+##  Pipeline Tasks (5 Tasks)
 
 | Task | Description |
 |------|-------------|
@@ -109,7 +109,7 @@ Airflow_Flight_Price_Analysis/
 | `dbt_gold` | Builds Gold KPI models |
 | `generate_report` | Creates execution summary report |
 
-## 📊 KPI Definitions
+##  KPI Definitions
 
 ### 1. Average Fare by Airline
 - Metrics: Average base fare, tax, total fare by airline
@@ -127,7 +127,7 @@ Airflow_Flight_Price_Analysis/
 - Top Routes: By booking count (top 50)
 - Metrics: Average fare, duration, direct vs connecting flights
 
-## 🗄️ Database Connection Details
+##  Database Connection Details
 
 ### MySQL (Staging)
 - **Host**: localhost
@@ -143,7 +143,7 @@ Airflow_Flight_Price_Analysis/
 - **User**: analytics
 - **Password**: analytics
 
-## 🛠️ Useful Commands
+##  Useful Commands
 
 ```bash
 # Container Management
@@ -162,7 +162,7 @@ docker exec flight_airflow_webserver airflow dags list-runs -d flight_price_pipe
 docker exec flight_airflow_scheduler sh -c "cd /opt/airflow/dbt/flight_analytics && dbt run"
 ```
 
-## 📝 Data Validation
+##  Data Validation
 
 ### MySQL Staging Validation
 - All 17 required columns exist
@@ -177,7 +177,7 @@ docker exec flight_airflow_scheduler sh -c "cd /opt/airflow/dbt/flight_analytics
 - Duplicate removal
 - Failed rows logged to `stg_validation_failures`
 
-## 📈 Sample Queries
+##  Sample Queries
 
 ### Check Bronze Data
 ```sql
@@ -197,11 +197,3 @@ SELECT * FROM bronze_gold.kpi_seasonal_fare_variation;
 SELECT * FROM bronze_gold.kpi_booking_count_by_airline;
 SELECT * FROM bronze_gold.kpi_most_popular_routes LIMIT 10;
 ```
-
-## 📄 License
-
-This project is for educational purposes.
-
-## 👤 Author
-
-Olivia Dosimey
