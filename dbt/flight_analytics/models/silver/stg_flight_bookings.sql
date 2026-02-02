@@ -37,7 +37,15 @@ cleaned_data as (
         coalesce(duration_hours, 0) as duration_hours,
         coalesce(trim(stopovers), 'Unknown') as stopovers,
         coalesce(trim(aircraft_type), 'Unknown') as aircraft_type,
-        coalesce(trim(booking_class), 'Economy') as booking_class,
+        
+        -- Booking Class - standardize naming (First Class → First)
+        case
+            when lower(trim(booking_class)) in ('first class', 'first') then 'First'
+            when lower(trim(booking_class)) in ('business class', 'business') then 'Business'
+            when lower(trim(booking_class)) in ('economy class', 'economy') then 'Economy'
+            else coalesce(trim(booking_class), 'Economy')
+        end as booking_class,
+        
         coalesce(trim(booking_source), 'Unknown') as booking_source,
         
         -- Fare columns - ensure positive values
@@ -45,8 +53,15 @@ cleaned_data as (
         coalesce(tax_surcharge_bdt, 0) as tax_surcharge_bdt,
         coalesce(total_fare_bdt, 0) as total_fare_bdt,
         
-        -- Seasonality and other fields
-        coalesce(trim(seasonality), 'Regular') as seasonality,
+        -- Seasonality - standardize naming (remove 'Holidays' suffix)
+        case
+            when lower(trim(seasonality)) like '%winter%' then 'Winter'
+            when lower(trim(seasonality)) like '%eid%' then 'Eid'
+            when lower(trim(seasonality)) like '%hajj%' then 'Hajj'
+            when lower(trim(seasonality)) = 'regular' then 'Regular'
+            else coalesce(trim(seasonality), 'Regular')
+        end as seasonality,
+        
         coalesce(days_before_departure, 0) as days_before_departure,
         
         -- Metadata

@@ -8,7 +8,7 @@
 /*
     KPI: Seasonal Fare Variation
     - Compares average fares during peak vs non-peak seasons
-    - Peak seasons: Eid ul-Fitr, Eid ul-Adha, Winter Holidays
+    - Peak seasons: Eid, Hajj, Winter (standardized names)
 */
 
 with bookings as (
@@ -20,7 +20,7 @@ season_classification as (
     select
         *,
         case 
-            when seasonality in {{ var('peak_seasons', "('Eid ul-Fitr', 'Eid ul-Adha', 'Winter Holidays')") }}
+            when seasonality in ('Eid', 'Hajj', 'Winter')
             then 'Peak'
             else 'Non-Peak'
         end as season_type

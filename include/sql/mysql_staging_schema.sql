@@ -7,26 +7,26 @@ USE flight_staging;
 -- Drop table if exists for clean re-runs
 DROP TABLE IF EXISTS raw_flight_staging;
 
--- Create staging table with original column names
+-- Create staging table with original column names as in CSV
 CREATE TABLE raw_flight_staging (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    `Airline` VARCHAR(100),                    -- String
-    `Source` VARCHAR(10),                      -- String
-    `Source Name` VARCHAR(200),                -- String
-    `Destination` VARCHAR(10),                 -- String
-    `Destination Name` VARCHAR(200),           -- String
-    `Departure Date & Time` VARCHAR(50),       -- String (from Kaggle metadata)
-    `Arrival Date & Time` VARCHAR(50),         -- String (from Kaggle metadata)
-    `Duration (hrs)` FLOAT,                    -- Float (from Kaggle metadata)
-    `Stopovers` VARCHAR(50),                   -- String
-    `Aircraft Type` VARCHAR(50),               -- String
-    `Class` VARCHAR(50),                       -- String
-    `Booking Source` VARCHAR(50),              -- String
-    `Base Fare (BDT)` FLOAT,                   -- Float (from Kaggle metadata)
-    `Tax & Surcharge (BDT)` FLOAT,             -- Float (from Kaggle metadata)
-    `Total Fare (BDT)` FLOAT,                  -- Float (from Kaggle metadata)
-    `Seasonality` VARCHAR(50),                 -- String
-    `Days Before Departure` INT,               -- Int (from Kaggle metadata)
+    `Airline` VARCHAR(100),                    
+    `Source` VARCHAR(10),                      
+    `Source Name` VARCHAR(200),                
+    `Destination` VARCHAR(10),                 
+    `Destination Name` VARCHAR(200),           
+    `Departure Date & Time` VARCHAR(50),       
+    `Arrival Date & Time` VARCHAR(50),         
+    `Duration (hrs)` FLOAT,                    
+    `Stopovers` VARCHAR(50),                   
+    `Aircraft Type` VARCHAR(50),               
+    `Class` VARCHAR(50),                       
+    `Booking Source` VARCHAR(50),              
+    `Base Fare (BDT)` FLOAT,                   
+    `Tax & Surcharge (BDT)` FLOAT,             
+    `Total Fare (BDT)` FLOAT,                  
+    `Seasonality` VARCHAR(50),                 
+    `Days Before Departure` INT,               
     ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
     -- Indexes for common queries

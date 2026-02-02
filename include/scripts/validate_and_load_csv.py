@@ -62,6 +62,141 @@ EXPECTED_DTYPES = {
 }
 
 
+def perform_eda(df: pd.DataFrame) -> dict:
+    """
+    Perform Exploratory Data Analysis on the dataset.
+    Logs detailed statistics and returns a summary dictionary.
+    
+    Args:
+        df: The DataFrame to analyze
+        
+    Returns:
+        Dictionary with EDA summary statistics
+    """
+    logger.info("=" * 60)
+    logger.info("EXPLORATORY DATA ANALYSIS (EDA)")
+    logger.info("=" * 60)
+    
+    eda_summary = {}
+    
+    # 1. Basic Shape
+    eda_summary['total_rows'] = len(df)
+    eda_summary['total_columns'] = len(df.columns)
+    logger.info(f"\n[DATA SHAPE]")
+    logger.info(f"  Total Rows: {len(df):,}")
+    logger.info(f"  Total Columns: {len(df.columns)}")
+    
+    # 2. Missing Values Analysis
+    missing = df.isnull().sum()
+    missing_cols = missing[missing > 0]
+    eda_summary['missing_value_columns'] = len(missing_cols)
+    logger.info(f"\n[MISSING VALUES]")
+    if len(missing_cols) == 0:
+        logger.info("  No missing values found - all columns complete")
+    else:
+        for col, count in missing_cols.items():
+            pct = (count / len(df)) * 100
+            logger.info(f"  {col}: {count:,} missing ({pct:.2f}%)")
+    
+    # 3. Seasonality Distribution
+    logger.info(f"\n[SEASONALITY DISTRIBUTION]")
+    seasonality_counts = df['Seasonality'].value_counts()
+    eda_summary['seasonality_values'] = seasonality_counts.to_dict()
+    for season, count in seasonality_counts.items():
+        pct = (count / len(df)) * 100
+        logger.info(f"  {season}: {count:,} ({pct:.1f}%)")
+    
+    # 4. Class Distribution
+    logger.info(f"\n[CLASS DISTRIBUTION]")
+    class_counts = df['Class'].value_counts()
+    eda_summary['class_values'] = class_counts.to_dict()
+    for cls, count in class_counts.items():
+        pct = (count / len(df)) * 100
+        logger.info(f"  {cls}: {count:,} ({pct:.1f}%)")
+    
+    # 5. Airline Distribution (Top 5)
+    logger.info(f"\n[TOP 5 AIRLINES]")
+    airline_counts = df['Airline'].value_counts().head(5)
+    eda_summary['unique_airlines'] = df['Airline'].nunique()
+    logger.info(f"  Total unique airlines: {df['Airline'].nunique()}")
+    for airline, count in airline_counts.items():
+        pct = (count / len(df)) * 100
+        logger.info(f"  {airline}: {count:,} ({pct:.1f}%)")
+    
+    # 6. Stopovers Distribution
+    logger.info(f"\n[STOPOVERS DISTRIBUTION]")
+    stopover_counts = df['Stopovers'].value_counts()
+    eda_summary['stopover_values'] = stopover_counts.to_dict()
+    for stopover, count in stopover_counts.items():
+        pct = (count / len(df)) * 100
+        logger.info(f"  {stopover}: {count:,} ({pct:.1f}%)")
+    
+    # 7. Fare Statistics
+    logger.info(f"\n[FARE STATISTICS]")
+    logger.info(f"  Base Fare (BDT):")
+    logger.info(f"    Min: {df['Base Fare (BDT)'].min():,.2f}")
+    logger.info(f"    Max: {df['Base Fare (BDT)'].max():,.2f}")
+    logger.info(f"    Mean: {df['Base Fare (BDT)'].mean():,.2f}")
+    logger.info(f"  Total Fare (BDT):")
+    logger.info(f"    Min: {df['Total Fare (BDT)'].min():,.2f}")
+    logger.info(f"    Max: {df['Total Fare (BDT)'].max():,.2f}")
+    logger.info(f"    Mean: {df['Total Fare (BDT)'].mean():,.2f}")
+    eda_summary['avg_total_fare'] = df['Total Fare (BDT)'].mean()
+    
+    # 8. Duration Statistics
+    logger.info(f"\n[DURATION STATISTICS]")
+    logger.info(f"  Duration (hrs):")
+    logger.info(f"    Min: {df['Duration (hrs)'].min():.2f}")
+    logger.info(f"    Max: {df['Duration (hrs)'].max():.2f}")
+    logger.info(f"    Mean: {df['Duration (hrs)'].mean():.2f}")
+    eda_summary['avg_duration'] = df['Duration (hrs)'].mean()
+    
+    # 9. Route Analysis
+    logger.info(f"\n[ROUTE ANALYSIS]")
+    unique_sources = df['Source'].nunique()
+    unique_destinations = df['Destination'].nunique()
+    unique_routes = df.groupby(['Source', 'Destination']).ngroups
+    eda_summary['unique_sources'] = unique_sources
+    eda_summary['unique_destinations'] = unique_destinations
+    eda_summary['unique_routes'] = unique_routes
+    logger.info(f"  Unique source airports: {unique_sources}")
+    logger.info(f"  Unique destination airports: {unique_destinations}")
+    logger.info(f"  Unique routes (source-destination pairs): {unique_routes}")
+    
+    # 10. Data Quality Issues Detection
+    logger.info(f"\n[DATA QUALITY CHECK]")
+    issues = []
+    
+    # Check for negative fares
+    negative_fares = len(df[df['Base Fare (BDT)'] < 0])
+    if negative_fares > 0:
+        issues.append(f"Negative base fares: {negative_fares}")
+        logger.warning(f"  WARNING: {negative_fares} records with negative base fares")
+    
+    # Check for zero total fares
+    zero_fares = len(df[df['Total Fare (BDT)'] <= 0])
+    if zero_fares > 0:
+        issues.append(f"Zero/negative total fares: {zero_fares}")
+        logger.warning(f"  WARNING: {zero_fares} records with zero/negative total fares")
+    
+    # Check for invalid durations
+    invalid_duration = len(df[(df['Duration (hrs)'] < 0) | (df['Duration (hrs)'] > 48)])
+    if invalid_duration > 0:
+        issues.append(f"Invalid durations: {invalid_duration}")
+        logger.warning(f"  WARNING: {invalid_duration} records with invalid durations (< 0 or > 48 hrs)")
+    
+    if len(issues) == 0:
+        logger.info("  No data quality issues detected")
+    
+    eda_summary['data_quality_issues'] = issues
+    
+    logger.info("=" * 60)
+    logger.info("EDA COMPLETE")
+    logger.info("=" * 60)
+    
+    return eda_summary
+
+
 def validate_csv_structure(csv_path: str) -> Tuple[bool, List[str], pd.DataFrame]:
     """
     Validate CSV file structure and column names.
@@ -288,8 +423,13 @@ def validate_and_load(csv_path: str, mysql_config: dict) -> bool:
         )
         return False
     
-    # Step 2: Load to MySQL
+    # Step 2: Perform EDA
+    logger.info(f"\n[RECORD COUNT] CSV Raw Data: {len(df):,} rows")
+    eda_summary = perform_eda(df)
+    
+    # Step 3: Load to MySQL
     success, rows_loaded, error_msg = load_csv_to_mysql(df, mysql_config)
+    logger.info(f"[RECORD COUNT] Loaded to MySQL: {rows_loaded:,} rows")
     
     if success:
         log_ingestion_result(
@@ -321,7 +461,7 @@ def run_validation_and_load(**context):
     }
     
     # CSV path
-    csv_path = '/usr/local/airflow/dataset/Flight_Price_Dataset_of_Bangladesh.csv'
+    csv_path = '/opt/airflow/dataset/Flight_Price_Dataset_of_Bangladesh.csv'
     
     success = validate_and_load(csv_path, mysql_config)
     

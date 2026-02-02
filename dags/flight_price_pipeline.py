@@ -6,7 +6,7 @@ This DAG orchestrates the complete data pipeline for Bangladesh flight price ana
 2. Transfers validated data to PostgreSQL Bronze layer
 3. Runs dbt models for Silver (staging, dimensions, facts) and Gold (KPIs) layers
 
-Technologies: Airflow, MySQL, PostgreSQL, dbt, Astronomer Cosmos
+Technologies: Airflow, MySQL, PostgreSQL, dbt
 Architecture: Medallion (Bronze -> Silver -> Gold)
 """
 
@@ -15,18 +15,11 @@ from pathlib import Path
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from airflow.operators.empty import EmptyOperator
-from airflow.providers.mysql.operators.mysql import MySqlOperator
-from airflow.providers.postgres.operators.postgres import PostgresOperator
-from airflow.utils.task_group import TaskGroup
-
-# Cosmos imports for dbt integration
-from cosmos import DbtTaskGroup, ProjectConfig, ProfileConfig, ExecutionConfig
-from cosmos.profiles import PostgresUserPasswordProfileMapping
+from airflow.operators.bash import BashOperator
 
 # Import custom scripts
 import sys
-sys.path.insert(0, '/usr/local/airflow/include/scripts')
+sys.path.insert(0, '/opt/airflow/include/scripts')
 from validate_and_load_csv import run_validation_and_load
 from transfer_to_bronze import run_transfer_to_bronze
 
@@ -42,25 +35,7 @@ default_args = {
 }
 
 # Paths
-DBT_PROJECT_PATH = Path('/usr/local/airflow/dbt/flight_analytics')
-DBT_EXECUTABLE_PATH = '/usr/local/airflow/.local/bin/dbt'
-
-# dbt Profile Configuration
-profile_config = ProfileConfig(
-    profile_name='flight_analytics',
-    target_name='dev',
-    profile_mapping=PostgresUserPasswordProfileMapping(
-        conn_id='postgres_analytics',
-        profile_args={
-            'schema': 'bronze',
-        },
-    ),
-)
-
-# dbt Execution Configuration
-execution_config = ExecutionConfig(
-    dbt_executable_path=DBT_EXECUTABLE_PATH,
-)
+DBT_PROJECT_PATH = '/opt/airflow/dbt/flight_analytics'
 
 
 def generate_summary_report(**context):
@@ -93,34 +68,34 @@ def generate_summary_report(**context):
         # Bronze layer stats
         cursor.execute("SELECT COUNT(*) FROM bronze.raw_flight_data")
         bronze_count = cursor.fetchone()[0]
-        report.append(f"\n📦 BRONZE LAYER:")
+        report.append(f"\n BRONZE LAYER:")
         report.append(f"   Total records: {bronze_count:,}")
         
         # Silver layer stats
-        cursor.execute("SELECT COUNT(*) FROM silver.stg_flight_bookings")
+        cursor.execute("SELECT COUNT(*) FROM bronze_silver.stg_flight_bookings")
         silver_count = cursor.fetchone()[0]
-        report.append(f"\n🥈 SILVER LAYER:")
+        report.append(f"\n SILVER LAYER:")
         report.append(f"   Validated records: {silver_count:,}")
         report.append(f"   Validation rate: {(silver_count/bronze_count*100):.1f}%")
         
         # Dimension counts
-        cursor.execute("SELECT COUNT(*) FROM silver.dim_airline")
+        cursor.execute("SELECT COUNT(*) FROM bronze_silver.dim_airline")
         airline_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM silver.dim_route")
+        cursor.execute("SELECT COUNT(*) FROM bronze_silver.dim_route")
         route_count = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM silver.dim_date")
+        cursor.execute("SELECT COUNT(*) FROM bronze_silver.dim_date")
         date_count = cursor.fetchone()[0]
         report.append(f"   Unique airlines: {airline_count}")
         report.append(f"   Unique routes: {route_count}")
         report.append(f"   Date range entries: {date_count}")
         
         # Gold layer KPIs
-        report.append(f"\n🥇 GOLD LAYER (KPIs):")
+        report.append(f"\n GOLD LAYER (KPIs):")
         
         # Top airline by bookings
         cursor.execute("""
             SELECT airline, total_bookings, market_share_pct 
-            FROM gold.kpi_booking_count_by_airline 
+            FROM bronze_gold.kpi_booking_count_by_airline 
             ORDER BY total_bookings DESC LIMIT 3
         """)
         top_airlines = cursor.fetchall()
@@ -131,7 +106,7 @@ def generate_summary_report(**context):
         # Top routes
         cursor.execute("""
             SELECT route_code, total_bookings, avg_fare_bdt 
-            FROM gold.kpi_most_popular_routes 
+            FROM bronze_gold.kpi_most_popular_routes 
             ORDER BY total_bookings DESC LIMIT 3
         """)
         top_routes = cursor.fetchall()
@@ -143,7 +118,7 @@ def generate_summary_report(**context):
         cursor.execute("""
             SELECT season_type, SUM(total_bookings) as bookings, 
                    AVG(avg_total_fare_bdt) as avg_fare
-            FROM gold.kpi_seasonal_fare_variation 
+            FROM bronze_gold.kpi_seasonal_fare_variation 
             GROUP BY season_type
         """)
         seasonal = cursor.fetchall()
@@ -152,7 +127,7 @@ def generate_summary_report(**context):
             report.append(f"     {season_type}: {int(bookings):,} bookings, Avg ৳{avg_fare:,.0f}")
         
         report.append("\n" + "=" * 60)
-        report.append("Pipeline completed successfully! ✅")
+        report.append("Pipeline completed successfully! ")
         report.append("=" * 60)
         
         # Log the report
@@ -181,9 +156,6 @@ with DAG(
     doc_md=__doc__,
 ) as dag:
     
-    # Start marker
-    start = EmptyOperator(task_id='start')
-    
     # Task 1: Validate and Load CSV to MySQL
     validate_and_load_csv = PythonOperator(
         task_id='validate_and_load_csv',
@@ -207,55 +179,31 @@ with DAG(
         """,
     )
     
-    # Task Group: dbt Staging Models (Silver Layer - Validation)
-    with TaskGroup(group_id='dbt_staging') as dbt_staging:
-        dbt_staging_models = DbtTaskGroup(
-            group_id='staging_models',
-            project_config=ProjectConfig(
-                dbt_project_path=DBT_PROJECT_PATH,
-            ),
-            profile_config=profile_config,
-            execution_config=execution_config,
-            operator_args={
-                'install_deps': True,
-            },
-            default_args={
-                'retries': 2,
-            },
-            select=['path:models/staging'],
-        )
+    # Task 3: dbt Dependencies and Silver Models
+    dbt_silver = BashOperator(
+        task_id='dbt_silver',
+        bash_command=f'cd {DBT_PROJECT_PATH} && dbt deps && dbt run --select silver',
+        doc_md="""
+        Runs dbt Silver layer models:
+        - Installs dbt packages
+        - Creates staging, dimension, and fact tables
+        """,
+    )
     
-    # Task Group: dbt Marts Models (Silver Layer - Dimensions/Facts)
-    with TaskGroup(group_id='dbt_marts') as dbt_marts:
-        dbt_marts_models = DbtTaskGroup(
-            group_id='marts_models',
-            project_config=ProjectConfig(
-                dbt_project_path=DBT_PROJECT_PATH,
-            ),
-            profile_config=profile_config,
-            execution_config=execution_config,
-            default_args={
-                'retries': 2,
-            },
-            select=['path:models/marts'],
-        )
+    # Task 4: dbt Gold Models (KPIs)
+    dbt_gold = BashOperator(
+        task_id='dbt_gold',
+        bash_command=f'cd {DBT_PROJECT_PATH} && dbt run --select gold',
+        doc_md="""
+        Runs dbt Gold layer KPI models:
+        - Average Fare by Airline
+        - Booking Count by Airline
+        - Most Popular Routes
+        - Seasonal Fare Variation
+        """,
+    )
     
-    # Task Group: dbt KPI Models (Gold Layer)
-    with TaskGroup(group_id='dbt_kpis') as dbt_kpis:
-        dbt_kpi_models = DbtTaskGroup(
-            group_id='kpi_models',
-            project_config=ProjectConfig(
-                dbt_project_path=DBT_PROJECT_PATH,
-            ),
-            profile_config=profile_config,
-            execution_config=execution_config,
-            default_args={
-                'retries': 2,
-            },
-            select=['path:models/kpis'],
-        )
-    
-    # Task: Generate Summary Report
+    # Task 5: Generate Summary Report
     generate_report = PythonOperator(
         task_id='generate_report',
         python_callable=generate_summary_report,
@@ -267,17 +215,6 @@ with DAG(
         """,
     )
     
-    # End marker
-    end = EmptyOperator(task_id='end')
+    # Define task dependencies (5 tasks in sequence)
+    validate_and_load_csv >> transfer_to_bronze >> dbt_silver >> dbt_gold >> generate_report
     
-    # Define task dependencies
-    (
-        start
-        >> validate_and_load_csv
-        >> transfer_to_bronze
-        >> dbt_staging
-        >> dbt_marts
-        >> dbt_kpis
-        >> generate_report
-        >> end
-    )

@@ -1,0 +1,28 @@
+# Environment variables
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Airflow logs
+logs/
+
+# Airflow plugins (if empty)
+plugins/
+
+# dbt auto-generated files
+dbt/flight_analytics/target/
+dbt/flight_analytics/dbt_packages/
+dbt/flight_analytics/package-lock.yml
+dbt/flight_analytics/.user.yml
+dbt/flight_analytics/logs/
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db

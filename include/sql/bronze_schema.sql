@@ -55,7 +55,4 @@ CREATE TABLE bronze.transfer_log (
     transferred_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Grant permissions (if needed)
--- GRANT ALL PRIVILEGES ON SCHEMA bronze TO analytics;
--- GRANT ALL PRIVILEGES ON SCHEMA silver TO analytics;
--- GRANT ALL PRIVILEGES ON SCHEMA gold TO analytics;
+

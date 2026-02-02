@@ -1,13 +1,22 @@
-FROM quay.io/astronomer/astro-runtime:12.4.0
+# Use official Apache Airflow image
+FROM apache/airflow:2.10.4-python3.11
 
-# Install dbt and database connectors
-RUN pip install --no-cache-dir \
-    astronomer-cosmos==1.7.1 \
-    dbt-postgres==1.9.0 \
-    mysql-connector-python==9.1.0 \
-    pymysql==1.1.1 \
-    pandas==2.2.3 \
-    psycopg2-binary==2.9.10
+USER root
+
+# Install system dependencies for psycopg2 build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev gcc libc-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+USER airflow
+
+# Install Python dependencies
+COPY requirements.txt /requirements.txt
+RUN pip install --no-cache-dir -r /requirements.txt
 
 # Copy dbt project
-COPY dbt/flight_analytics /usr/local/airflow/dbt/flight_analytics
+COPY --chown=airflow:root dbt/flight_analytics /opt/airflow/dbt/flight_analytics
+
+# Set dbt profiles directory
+ENV DBT_PROFILES_DIR=/opt/airflow/dbt/flight_analytics
