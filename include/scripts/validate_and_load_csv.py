@@ -1,12 +1,14 @@
 """
 CSV Validation and MySQL Loading Script
 Validates CSV structure and loads data into MySQL staging table with logging.
+Supports incremental and full load using row hashing for change detection.
 """
 
 import pandas as pd
 import mysql.connector
 from mysql.connector import Error
 import logging
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import Tuple, List, Optional
@@ -60,6 +62,81 @@ EXPECTED_DTYPES = {
     'Seasonality': 'object',          # String
     'Days Before Departure': 'int64'  # Int
 }
+
+# Load modes
+LOAD_MODE_FULL = 'full'        # Truncate and reload all data
+LOAD_MODE_INCREMENTAL = 'incremental'  # Only insert new/changed records
+
+
+def generate_row_hash(row: pd.Series, columns: List[str]) -> str:
+    """
+    Generate a deterministic MD5 hash from ALL columns of a row.
+    
+    This hash is used for:
+    1. Detecting new records during incremental load
+    2. Detecting changed records (data modifications)
+    3. Ensuring data integrity through deduplication
+    
+    Args:
+        row: A pandas Series representing a single row
+        columns: List of column names to include in hash (all columns)
+        
+    Returns:
+        MD5 hash string of the row content
+        
+    Example:
+        Input row: Airline='US-Bangla', Source='DAC', Destination='DXB', ...
+        Output: 'a1b2c3d4e5f6789012345678901234567890abcd'
+    """
+    # Concatenate all column values into a single string
+    # Use '|' as separator and handle None/NaN values
+    values = []
+    for col in columns:
+        val = row.get(col, '')
+        # Convert to string and handle None/NaN
+        if pd.isna(val):
+            val = 'NULL'
+        else:
+            val = str(val).strip()
+        values.append(val)
+    
+    # Create the hash string from all values
+    hash_string = '|'.join(values)
+    
+    # Generate MD5 hash
+    return hashlib.md5(hash_string.encode('utf-8')).hexdigest()
+
+
+def add_row_hashes(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
+    """
+    Add a 'row_hash' column to the DataFrame using all specified columns.
+    
+    The hash enables:
+    - Full Load: Truncate table and insert all records with hashes
+    - Incremental Load: Compare hashes to identify new/changed records
+    
+    Args:
+        df: DataFrame to add hashes to
+        columns: List of columns to include in hash calculation
+        
+    Returns:
+        DataFrame with additional 'row_hash' column
+    """
+    logger.info(f"Generating row hashes using {len(columns)} columns...")
+    
+    # Generate hash for each row using all columns
+    df['row_hash'] = df.apply(lambda row: generate_row_hash(row, columns), axis=1)
+    
+    # Count unique hashes to detect potential duplicates
+    unique_hashes = df['row_hash'].nunique()
+    total_rows = len(df)
+    
+    if unique_hashes < total_rows:
+        logger.warning(f"  {total_rows - unique_hashes} potential duplicate rows detected (same hash)")
+    else:
+        logger.info(f"  All {total_rows:,} rows have unique hashes")
+    
+    return df
 
 
 def perform_eda(df: pd.DataFrame) -> dict:
@@ -278,23 +355,30 @@ def load_csv_to_mysql(
     df: pd.DataFrame,
     mysql_config: dict,
     table_name: str = 'raw_flight_staging',
-    batch_size: int = 5000
-) -> Tuple[bool, int, Optional[str]]:
+    batch_size: int = 5000,
+    load_mode: str = LOAD_MODE_FULL
+) -> Tuple[bool, int, int, Optional[str]]:
     """
-    Load validated DataFrame into MySQL staging table.
+    Load validated DataFrame into MySQL staging table with hash-based change detection.
+    
+    Supports two load modes:
+    - FULL: Truncate table and reload all data (always includes row_hash)
+    - INCREMENTAL: Only insert records with new hashes (skip existing ones)
     
     Args:
         df: Validated pandas DataFrame
         mysql_config: MySQL connection configuration
         table_name: Target table name
         batch_size: Number of rows per batch insert
+        load_mode: 'full' or 'incremental'
         
     Returns:
-        Tuple of (success, rows_loaded, error_message)
+        Tuple of (success, rows_loaded, rows_skipped, error_message)
     """
     connection = None
     cursor = None
     rows_loaded = 0
+    rows_skipped = 0
     
     try:
         # Connect to MySQL
@@ -302,56 +386,106 @@ def load_csv_to_mysql(
         cursor = connection.cursor()
         
         logger.info(f"Connected to MySQL database: {mysql_config.get('database', 'unknown')}")
+        logger.info(f"Load mode: {load_mode.upper()}")
         
-        # Truncate table for fresh load
-        cursor.execute(f"TRUNCATE TABLE {table_name}")
-        logger.info(f"Truncated table {table_name}")
+        # Generate row hashes using ALL columns
+        df_with_hash = add_row_hashes(df.copy(), EXPECTED_COLUMNS)
         
-        # Prepare insert statement
-        columns = EXPECTED_COLUMNS
-        placeholders = ', '.join(['%s'] * len(columns))
-        column_names = ', '.join([f'`{col}`' for col in columns])
-        insert_sql = f"INSERT INTO {table_name} ({column_names}) VALUES ({placeholders})"
+        # Columns to insert (including row_hash)
+        insert_columns = EXPECTED_COLUMNS + ['row_hash']
         
-        # Select only expected columns and convert to list of tuples
-        df_subset = df[EXPECTED_COLUMNS].copy()
-        
-        # Handle NaN values - replace with None for MySQL
-        df_subset = df_subset.where(pd.notnull(df_subset), None)
-        
-        # Insert in batches
-        total_rows = len(df_subset)
-        for i in range(0, total_rows, batch_size):
-            batch = df_subset.iloc[i:i+batch_size]
-            batch_data = [tuple(row) for row in batch.values]
-            cursor.executemany(insert_sql, batch_data)
-            connection.commit()
-            rows_loaded += len(batch_data)
+        if load_mode == LOAD_MODE_FULL:
+            # FULL LOAD: Truncate and reload all data
+            cursor.execute(f"TRUNCATE TABLE {table_name}")
+            logger.info(f"Truncated table {table_name} for full load")
             
-            if (i + batch_size) % 10000 == 0 or i + batch_size >= total_rows:
-                logger.info(f"Progress: {min(i + batch_size, total_rows):,}/{total_rows:,} rows loaded")
+            # Prepare insert statement with row_hash
+            placeholders = ', '.join(['%s'] * len(insert_columns))
+            column_names = ', '.join([f'`{col}`' for col in insert_columns])
+            insert_sql = f"INSERT INTO {table_name} ({column_names}) VALUES ({placeholders})"
+            
+            # Select columns and convert to list of tuples
+            df_subset = df_with_hash[insert_columns].copy()
+            df_subset = df_subset.where(pd.notnull(df_subset), None)
+            
+            # Insert in batches
+            total_rows = len(df_subset)
+            for i in range(0, total_rows, batch_size):
+                batch = df_subset.iloc[i:i+batch_size]
+                batch_data = [tuple(row) for row in batch.values]
+                cursor.executemany(insert_sql, batch_data)
+                connection.commit()
+                rows_loaded += len(batch_data)
+                
+                if (i + batch_size) % 10000 == 0 or i + batch_size >= total_rows:
+                    logger.info(f"Progress: {min(i + batch_size, total_rows):,}/{total_rows:,} rows loaded")
+        
+        elif load_mode == LOAD_MODE_INCREMENTAL:
+            # INCREMENTAL LOAD: Only insert rows with new hashes
+            logger.info("Fetching existing hashes from database...")
+            
+            cursor.execute(f"SELECT `row_hash` FROM {table_name}")
+            existing_hashes = set(row[0] for row in cursor.fetchall())
+            logger.info(f"Found {len(existing_hashes):,} existing records in database")
+            
+            # Filter to only new records (hash not in existing)
+            df_subset = df_with_hash[insert_columns].copy()
+            df_subset = df_subset[~df_subset['row_hash'].isin(existing_hashes)]
+            df_subset = df_subset.where(pd.notnull(df_subset), None)
+            
+            new_records = len(df_subset)
+            rows_skipped = len(df_with_hash) - new_records
+            
+            if new_records == 0:
+                logger.info("No new records to insert - all records already exist")
+                return True, 0, rows_skipped, None
+            
+            logger.info(f"Found {new_records:,} new records to insert, {rows_skipped:,} existing records skipped")
+            
+            # Prepare insert statement
+            placeholders = ', '.join(['%s'] * len(insert_columns))
+            column_names = ', '.join([f'`{col}`' for col in insert_columns])
+            insert_sql = f"INSERT INTO {table_name} ({column_names}) VALUES ({placeholders})"
+            
+            # Insert only new records in batches
+            total_rows = len(df_subset)
+            for i in range(0, total_rows, batch_size):
+                batch = df_subset.iloc[i:i+batch_size]
+                batch_data = [tuple(row) for row in batch.values]
+                cursor.executemany(insert_sql, batch_data)
+                connection.commit()
+                rows_loaded += len(batch_data)
+                
+                if (i + batch_size) % 10000 == 0 or i + batch_size >= total_rows:
+                    logger.info(f"Progress: {min(i + batch_size, total_rows):,}/{total_rows:,} new rows loaded")
         
         logger.info(f"SUCCESS | Loaded {rows_loaded:,} rows into MySQL {table_name}")
+        if rows_skipped > 0:
+            logger.info(f"         Skipped {rows_skipped:,} existing rows (hash match)")
         
         # Verify row count
         cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
         mysql_count = cursor.fetchone()[0]
         
-        if mysql_count == total_rows:
-            logger.info(f"Row count verification: CSV={total_rows:,}, MySQL={mysql_count:,} ✓")
+        if load_mode == LOAD_MODE_FULL:
+            expected = len(df_with_hash)
+            if mysql_count == expected:
+                logger.info(f"Row count verification: CSV={expected:,}, MySQL={mysql_count:,} ✓")
+            else:
+                logger.warning(f"Row count mismatch: CSV={expected:,}, MySQL={mysql_count:,}")
         else:
-            logger.warning(f"Row count mismatch: CSV={total_rows:,}, MySQL={mysql_count:,}")
+            logger.info(f"Total records in MySQL after incremental load: {mysql_count:,}")
         
-        return True, rows_loaded, None
+        return True, rows_loaded, rows_skipped, None
         
     except Error as e:
         error_msg = f"MySQL error: {str(e)}"
         logger.error(error_msg)
-        return False, rows_loaded, error_msg
+        return False, rows_loaded, rows_skipped, error_msg
     except Exception as e:
         error_msg = f"Unexpected error during load: {str(e)}"
         logger.error(error_msg)
-        return False, rows_loaded, error_msg
+        return False, rows_loaded, rows_skipped, error_msg
     finally:
         if cursor:
             cursor.close()
@@ -396,19 +530,24 @@ def log_ingestion_result(
             connection.close()
 
 
-def validate_and_load(csv_path: str, mysql_config: dict) -> bool:
+def validate_and_load(csv_path: str, mysql_config: dict, load_mode: str = LOAD_MODE_FULL) -> bool:
     """
-    Main function to validate CSV and load to MySQL.
+    Main function to validate CSV and load to MySQL with hash-based change detection.
     
     Args:
         csv_path: Path to CSV file
         mysql_config: MySQL connection configuration
+        load_mode: 'full' (truncate and reload) or 'incremental' (only new records)
         
     Returns:
         True if successful, False otherwise
     """
     started_at = datetime.now()
     file_name = Path(csv_path).name
+    
+    logger.info("=" * 60)
+    logger.info(f"STARTING {'FULL' if load_mode == LOAD_MODE_FULL else 'INCREMENTAL'} LOAD")
+    logger.info("=" * 60)
     
     # Step 1: Validate CSV
     is_valid, errors, df = validate_csv_structure(csv_path)
@@ -427,9 +566,14 @@ def validate_and_load(csv_path: str, mysql_config: dict) -> bool:
     logger.info(f"\n[RECORD COUNT] CSV Raw Data: {len(df):,} rows")
     eda_summary = perform_eda(df)
     
-    # Step 3: Load to MySQL
-    success, rows_loaded, error_msg = load_csv_to_mysql(df, mysql_config)
+    # Step 3: Load to MySQL with hashing
+    success, rows_loaded, rows_skipped, error_msg = load_csv_to_mysql(
+        df, mysql_config, load_mode=load_mode
+    )
+    
     logger.info(f"[RECORD COUNT] Loaded to MySQL: {rows_loaded:,} rows")
+    if rows_skipped > 0:
+        logger.info(f"[RECORD COUNT] Skipped (already exist): {rows_skipped:,} rows")
     
     if success:
         log_ingestion_result(
@@ -447,7 +591,15 @@ def validate_and_load(csv_path: str, mysql_config: dict) -> bool:
 
 # For Airflow task usage
 def run_validation_and_load(**context):
-    """Airflow-callable function for CSV validation and MySQL load."""
+    """
+    Airflow-callable function for CSV validation and MySQL load.
+    
+    Supports both full and incremental load modes via DAG params:
+    - Full Load (default): Truncates table and reloads all data with hashes
+    - Incremental Load: Only inserts records with new hashes
+    
+    To trigger incremental load, pass params={'load_mode': 'incremental'} to DAG trigger.
+    """
     from airflow.hooks.base import BaseHook
     
     # Get MySQL connection from Airflow
@@ -463,16 +615,32 @@ def run_validation_and_load(**context):
     # CSV path
     csv_path = '/opt/airflow/dataset/Flight_Price_Dataset_of_Bangladesh.csv'
     
-    success = validate_and_load(csv_path, mysql_config)
+    # Get load mode from DAG params (default to 'full')
+    params = context.get('params', {})
+    load_mode = params.get('load_mode', LOAD_MODE_FULL)
+    
+    # Validate load mode
+    if load_mode not in [LOAD_MODE_FULL, LOAD_MODE_INCREMENTAL]:
+        logger.warning(f"Invalid load_mode '{load_mode}', defaulting to 'full'")
+        load_mode = LOAD_MODE_FULL
+    
+    success = validate_and_load(csv_path, mysql_config, load_mode=load_mode)
     
     if not success:
         raise Exception("CSV validation and load failed. Check logs for details.")
     
-    return "CSV validation and MySQL load completed successfully"
+    return f"CSV validation and MySQL {load_mode} load completed successfully"
 
 
 if __name__ == '__main__':
     # For local testing
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Validate and load CSV to MySQL')
+    parser.add_argument('--mode', choices=['full', 'incremental'], default='full',
+                        help='Load mode: full (truncate and reload) or incremental (new records only)')
+    args = parser.parse_args()
+    
     mysql_config = {
         'host': 'localhost',
         'port': 3306,
@@ -482,4 +650,5 @@ if __name__ == '__main__':
     }
     
     csv_path = '../../dataset/Flight_Price_Dataset_of_Bangladesh.csv'
-    validate_and_load(csv_path, mysql_config)
+    validate_and_load(csv_path, mysql_config, load_mode=args.mode)
+

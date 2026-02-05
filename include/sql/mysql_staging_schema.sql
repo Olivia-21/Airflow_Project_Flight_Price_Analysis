@@ -1,5 +1,6 @@
 -- MySQL Staging Schema for Raw Flight Data
 -- This table matches the original CSV structure exactly with data types from Kaggle metadata
+-- Includes row_hash for incremental/full load change detection
 
 CREATE DATABASE IF NOT EXISTS flight_staging;
 USE flight_staging;
@@ -8,6 +9,7 @@ USE flight_staging;
 DROP TABLE IF EXISTS raw_flight_staging;
 
 -- Create staging table with original column names as in CSV
+-- row_hash is computed from ALL columns for change detection
 CREATE TABLE raw_flight_staging (
     id INT AUTO_INCREMENT PRIMARY KEY,
     `Airline` VARCHAR(100),                    
@@ -26,14 +28,16 @@ CREATE TABLE raw_flight_staging (
     `Tax & Surcharge (BDT)` FLOAT,             
     `Total Fare (BDT)` FLOAT,                  
     `Seasonality` VARCHAR(50),                 
-    `Days Before Departure` INT,               
+    `Days Before Departure` INT,
+    `row_hash` VARCHAR(32),                    -- MD5 hash of all columns for change detection
     ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
     -- Indexes for common queries
     INDEX idx_airline (`Airline`),
     INDEX idx_source (`Source`),
     INDEX idx_destination (`Destination`),
-    INDEX idx_seasonality (`Seasonality`)
+    INDEX idx_seasonality (`Seasonality`),
+    INDEX idx_row_hash (`row_hash`)            -- Index for fast hash lookups during incremental load
 );
 
 -- Ingestion log table for tracking success/failure

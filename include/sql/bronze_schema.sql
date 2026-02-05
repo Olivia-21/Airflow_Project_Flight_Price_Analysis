@@ -1,5 +1,6 @@
 -- PostgreSQL Bronze Schema for Flight Analytics
 -- This schema stores the raw data transferred from MySQL with renamed columns (snake_case)
+-- Includes row_hash for incremental/full load change detection
 
 -- Create bronze schema
 CREATE SCHEMA IF NOT EXISTS bronze;
@@ -14,6 +15,7 @@ CREATE SCHEMA IF NOT EXISTS gold;
 DROP TABLE IF EXISTS bronze.raw_flight_data;
 
 -- Bronze Layer: Raw flight data with renamed columns
+-- row_hash is computed from ALL columns for change detection
 CREATE TABLE bronze.raw_flight_data (
     id SERIAL PRIMARY KEY,
     airline VARCHAR(100),
@@ -33,6 +35,7 @@ CREATE TABLE bronze.raw_flight_data (
     total_fare_bdt FLOAT,
     seasonality VARCHAR(50),
     days_before_departure INT,
+    row_hash VARCHAR(32),                               -- MD5 hash of all columns for change detection
     source_system VARCHAR(50) DEFAULT 'mysql_staging',
     ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -41,6 +44,7 @@ CREATE TABLE bronze.raw_flight_data (
 CREATE INDEX IF NOT EXISTS idx_bronze_airline ON bronze.raw_flight_data(airline);
 CREATE INDEX IF NOT EXISTS idx_bronze_route ON bronze.raw_flight_data(source_code, destination_code);
 CREATE INDEX IF NOT EXISTS idx_bronze_seasonality ON bronze.raw_flight_data(seasonality);
+CREATE INDEX IF NOT EXISTS idx_bronze_row_hash ON bronze.raw_flight_data(row_hash);  -- Index for fast hash lookups
 
 -- Transfer log table
 DROP TABLE IF EXISTS bronze.transfer_log;

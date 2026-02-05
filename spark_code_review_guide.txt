@@ -1,0 +1,767 @@
+================================================================================
+REAL-TIME SPARK STREAMING PIPELINE - CODE REVIEW GUIDE
+================================================================================
+
+This document explains every component of the Real-Time E-commerce Event 
+Streaming Pipeline in beginner-friendly terms. Use this to understand and 
+present the code during your review.
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+1. PROJECT OVERVIEW
+2. DATA GENERATOR (data_generator.py)
+3. SPARK STREAMING JOB (spark_streaming_to_postgres.py)
+4. DATABASE UTILITIES (db_utils.py)
+5. PERFORMANCE METRICS
+6. TEST CASES
+7. HOW EVERYTHING WORKS TOGETHER
+
+================================================================================
+1. PROJECT OVERVIEW
+================================================================================
+
+WHAT DOES THIS PROJECT DO?
+--------------------------
+This project simulates a real-world e-commerce data pipeline. It:
+1. Generates fake user activity events (like viewing or buying products)
+2. Processes these events in real-time using Apache Spark
+3. Stores the processed data in a PostgreSQL database
+
+WHY IS THIS USEFUL?
+-------------------
+In real companies like Amazon or Shopify, millions of user events happen 
+every second. This project teaches you how to:
+- Handle streaming data (data that arrives continuously)
+- Process data in real-time (not in batches overnight)
+- Store data reliably without duplicates
+- Handle failures gracefully
+
+TECHNOLOGIES USED:
+------------------
+- Python 3.11: The programming language
+- Apache Spark (PySpark): Distributed data processing engine
+- PostgreSQL: Relational database for storing events
+- Docker: Containers to run everything in isolation
+- YAML: Configuration file format
+
+================================================================================
+2. DATA GENERATOR (data_generator.py)
+================================================================================
+
+LOCATION: src/data_generator.py
+PURPOSE: Creates fake e-commerce events and writes them to CSV files
+
+HOW IT WORKS (STEP BY STEP):
+-----------------------------
+
+STEP 1: INITIALIZATION (Lines 33-63)
+-------------------------------------
+When the DataGenerator class starts, it:
+1. Loads configuration from settings.yaml (batch size, interval, etc.)
+2. Creates a "product catalog" - a list of 50+ fake products
+3. Creates a "user pool" - 1000 fake user IDs (USER_000001 to USER_001000)
+4. Ensures the output directory exists
+
+CODE EXPLANATION:
+```python
+self.output_path = Path(self.config["generator"]["output_path"])  # /data/incoming
+self.batch_size = self.config["generator"]["batch_size"]  # 100 events
+self.interval = self.config["generator"]["interval_seconds"]  # 5 seconds
+```
+- Path: Makes file path handling work on any operating system
+- batch_size: How many events to generate at once
+- interval: How long to wait between batches
+
+
+STEP 2: PRODUCT CATALOG GENERATION (Lines 92-126)
+-------------------------------------------------
+Creates realistic products across 8 categories:
+- Electronics: Wireless Headphones, Smart Watch, etc.
+- Clothing: Cotton T-Shirt, Denim Jeans, etc.
+- Home & Garden: Table Lamp, Plant Pot, etc.
+- And 5 more categories...
+
+Each product has:
+- product_id: Unique identifier (PROD_000001, PROD_000002, etc.)
+- product_name: Human-readable name
+- product_category: Which category it belongs to
+- base_price: A random price between $9.99 and $299.99
+
+
+STEP 3: DETERMINISTIC EVENT ID GENERATION (Lines 128-146)
+---------------------------------------------------------
+THIS IS A KEY CONCEPT!
+
+What is a Deterministic ID?
+The same inputs ALWAYS produce the same output.
+
+WHY IS THIS IMPORTANT?
+If the system crashes and replays the same events, we can detect duplicates
+because the event_id will be the same.
+
+CODE EXPLANATION:
+```python
+def _generate_event_id(self, user_id: str, product_id: str, timestamp: str) -> str:
+    # Combine the three values into one string
+    unique_string = f"{user_id}_{product_id}_{timestamp}"
+    
+    # Create an MD5 hash (a fixed-length "fingerprint" of the string)
+    hash_bytes = hashlib.md5(unique_string.encode()).digest()
+    
+    # Convert the hash to UUID format
+    return str(uuid.UUID(bytes=hash_bytes))
+```
+
+Example:
+- Input: USER_000001 + PROD_000005 + 2026-01-29 10:00:00
+- Output: Always "a1b2c3d4-e5f6-7890-abcd-ef1234567890" (same every time)
+
+
+STEP 4: SINGLE EVENT GENERATION (Lines 148-181)
+-----------------------------------------------
+Each event represents ONE user action:
+
+CODE EXPLANATION:
+```python
+def _generate_event(self) -> Dict:
+    # Pick a random user from our pool of 1000 users
+    user_id = random.choice(self.user_pool)
+    
+    # Pick a random product from our catalog
+    product = random.choice(self.product_catalog)
+    
+    # 30% chance of purchase, 70% chance of view
+    event_type = "purchase" if random.random() < self.purchase_probability else "view"
+    
+    # Generate timestamp in the last 60 seconds (for realism)
+    timestamp = datetime.now(timezone.utc) - timedelta(seconds=random.randint(0, 60))
+    
+    # Price is only set for purchases, NULL for views
+    price = None
+    if event_type == "purchase":
+        price = round(product["base_price"] * random.uniform(0.9, 1.1), 2)
+```
+
+WHY IS PRICE NULL FOR VIEWS?
+- When you VIEW a product, you haven't spent money yet
+- Only PURCHASES have a price
+- This is realistic to how real e-commerce data works
+
+
+STEP 5: ATOMIC FILE WRITING (Lines 183-214)
+-------------------------------------------
+THIS IS A KEY CONCEPT!
+
+What is an Atomic Operation?
+An operation that either completes entirely or doesn't happen at all.
+There's no "half-done" state.
+
+PROBLEM: If Spark reads a CSV file while we're still writing it,
+         we get corrupted data!
+
+SOLUTION: Write to a temporary file, then rename it.
+          Renaming is atomic on most file systems.
+
+CODE EXPLANATION:
+```python
+# Step 1: Write to a temporary file (starts with .tmp_)
+temp_filepath = self.output_path / f".tmp_{filename}"
+
+with open(temp_filepath, "w", newline="", encoding="utf-8") as f:
+    writer = csv.DictWriter(f, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(events)
+
+# Step 2: Rename to final filename (this is atomic!)
+os.rename(temp_filepath, filepath)
+```
+
+Spark is configured to ignore files starting with "." (hidden files),
+so it won't try to read the temporary file.
+
+
+STEP 6: GRACEFUL SHUTDOWN (Lines 221-224, 274-278)
+--------------------------------------------------
+When you press Ctrl+C or Docker sends a stop signal, we want to:
+1. Stop generating new events
+2. Finish writing the current batch
+3. Log how many events were generated
+4. Exit cleanly
+
+CODE EXPLANATION:
+```python
+def signal_handler(signum, frame):
+    generator.stop()
+
+signal.signal(signal.SIGTERM, signal_handler)  # Docker stop signal
+signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
+```
+
+
+================================================================================
+3. SPARK STREAMING JOB (spark_streaming_to_postgres.py)
+================================================================================
+
+LOCATION: src/spark_streaming_to_postgres.py
+PURPOSE: Read CSV files, validate/clean data, write to PostgreSQL
+
+WHAT IS SPARK STRUCTURED STREAMING?
+-----------------------------------
+- Spark normally processes data in "batches" (all data at once)
+- Structured Streaming processes data in "micro-batches" (small chunks)
+- It continuously monitors for new files and processes them as they arrive
+
+
+KEY COMPONENT 1: STREAMING CONFIGURATION (Lines 44-93)
+------------------------------------------------------
+Loads settings from YAML file and provides defaults if file is missing.
+
+Important settings:
+- trigger_interval: "10 seconds" - How often to check for new files
+- max_files_per_trigger: 5 - Process at most 5 files per batch
+- checkpoint_path: "/data/checkpoint" - Where to save progress
+
+
+KEY COMPONENT 2: EVENT SCHEMA (Lines 96-112)
+--------------------------------------------
+Defines the EXACT structure of incoming CSV data.
+
+WHY DEFINE A SCHEMA?
+- Streaming queries cannot "infer" schema (too slow)
+- Explicit schema ensures type safety
+- Catches malformed data early
+
+CODE EXPLANATION:
+```python
+def get_event_schema() -> StructType:
+    return StructType([
+        StructField("event_id", StringType(), nullable=False),
+        StructField("user_id", StringType(), nullable=False),
+        # ... more fields ...
+        StructField("price", DoubleType(), nullable=True),  # Can be NULL!
+        StructField("_corrupt_record", StringType(), nullable=True)  # For bad rows
+    ])
+```
+
+The "_corrupt_record" column is SPECIAL:
+- When a row doesn't match the schema, Spark puts it here instead of failing
+- This is called "PERMISSIVE" mode
+
+
+KEY COMPONENT 3: DATA VALIDATION & CLEANING (Lines 149-218)
+----------------------------------------------------------
+THIS IS CRITICAL FOR DATA QUALITY!
+
+What we validate:
+1. Remove corrupt records (malformed CSV rows)
+2. Remove records with NULL required fields
+3. Trim whitespace from strings
+4. Validate event_type is "view" or "purchase"
+5. Validate price is non-negative
+6. Ensure "view" events have NULL price
+7. Convert timestamp strings to proper timestamp type
+8. Filter out future timestamps (data integrity)
+
+CODE EXPLANATION:
+```python
+# Filter out corrupt records
+cleaned_df = df.filter(col("_corrupt_record").isNull())
+
+# Validate event_type
+cleaned_df = cleaned_df.filter(
+    lower(col("event_type")).isin(["view", "purchase"])
+)
+
+# For 'view' events, ensure price is null
+cleaned_df = cleaned_df.withColumn(
+    "price",
+    when(col("event_type") == "view", lit(None))
+    .otherwise(col("price"))
+)
+```
+
+
+KEY COMPONENT 4: FOREACHBATCH SINK (Lines 221-268)
+-------------------------------------------------
+THIS IS THE CORE OF THE PIPELINE!
+
+What is foreachBatch?
+- Standard Spark sinks (Kafka, files) don't support PostgreSQL directly
+- foreachBatch lets us write CUSTOM code for each micro-batch
+- We get the data as a DataFrame and can do anything with it
+
+CODE EXPLANATION:
+```python
+def write_to_postgres(batch_df: DataFrame, batch_id: int, config: StreamingConfig):
+    # Step 1: Collect data from Spark to Python
+    records = batch_df.collect()
+    
+    # Step 2: Convert Spark Row objects to Python dictionaries
+    record_dicts = [row.asDict() for row in records]
+    
+    # Step 3: Call our custom upsert function
+    inserted_count = batch_upsert(
+        records=record_dicts,
+        table_name="user_events",
+        config=config.db_config
+    )
+```
+
+
+KEY COMPONENT 5: STREAMING QUERY SETUP (Lines 353-360)
+-----------------------------------------------------
+This is where we configure the streaming job:
+
+CODE EXPLANATION:
+```python
+query = (validated_stream
+    .writeStream
+    .outputMode("append")              # Only write new records
+    .foreachBatch(lambda df, id: write_to_postgres(df, id, config))
+    .trigger(processingTime="10 seconds")  # Check every 10 seconds
+    .option("checkpointLocation", "/data/checkpoint")  # Save progress
+    .start()
+)
+```
+
+WHAT IS CHECKPOINTING?
+- Saves which files have been processed
+- If the job crashes, it resumes from where it left off
+- Prevents reprocessing the same data
+
+
+KEY COMPONENT 6: WAIT FOR POSTGRES (Lines 287-309)
+-------------------------------------------------
+Before starting Spark, we verify PostgreSQL is ready.
+This handles the case where containers start in wrong order.
+
+CODE EXPLANATION:
+```python
+def wait_for_postgres(config, max_retries=30, delay=2):
+    for attempt in range(1, max_retries + 1):
+        if test_connection(config.db_config):
+            return  # Success!
+        
+        logger.warning(f"PostgreSQL not ready, retrying in {delay}s...")
+        time.sleep(delay)
+    
+    raise ConnectionError("Failed to connect after maximum retries")
+```
+
+
+================================================================================
+4. DATABASE UTILITIES (db_utils.py)
+================================================================================
+
+LOCATION: src/utils/db_utils.py
+PURPOSE: Handle all PostgreSQL operations with reliability features
+
+
+KEY FEATURE 1: EXPONENTIAL BACKOFF RETRY (Lines 48-91)
+-----------------------------------------------------
+THIS IS A PRODUCTION BEST PRACTICE!
+
+What is Exponential Backoff?
+- If an operation fails, wait before retrying
+- Each retry waits LONGER than the previous one
+- Prevents overwhelming a recovering system
+
+Example:
+- Attempt 1 fails -> wait 1 second
+- Attempt 2 fails -> wait 2 seconds
+- Attempt 3 fails -> wait 4 seconds (capped at 30)
+
+CODE EXPLANATION:
+```python
+def retry_with_backoff(func, max_attempts=3, initial_delay=1.0):
+    delay = initial_delay
+    
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return func()  # Try the operation
+        except (OperationalError, DatabaseError) as e:
+            if attempt < max_attempts:
+                time.sleep(delay)
+                delay = min(delay * 2, 30)  # Double the delay
+            else:
+                raise  # All retries failed
+```
+
+
+KEY FEATURE 2: BATCH UPSERT (Lines 117-180)
+------------------------------------------
+THIS PREVENTS DUPLICATE DATA!
+
+What is an Upsert?
+- UPDATE if exists, INSERT if not
+- We use "INSERT ... ON CONFLICT DO NOTHING"
+- If the event_id already exists, skip it silently
+
+CODE EXPLANATION:
+```python
+insert_query = sql.SQL("""
+    INSERT INTO {table} ({columns})
+    VALUES %s
+    ON CONFLICT (event_id) DO NOTHING
+""").format(
+    table=sql.Identifier(table_name),
+    columns=sql.SQL(", ").join(map(sql.Identifier, columns))
+)
+```
+
+WHY USE execute_values?
+- Inserts multiple rows in ONE database call
+- Much faster than inserting one row at a time
+- From psycopg2.extras module
+
+
+KEY FEATURE 3: TRANSACTION ROLLBACK (Lines 166-178)
+---------------------------------------------------
+If ANY row in the batch fails, we rollback EVERYTHING.
+This ensures data consistency.
+
+CODE EXPLANATION:
+```python
+try:
+    execute_values(cursor, insert_query, values)
+    conn.commit()  # Save changes if successful
+except Exception as e:
+    conn.rollback()  # Undo changes if failed
+    raise
+```
+
+
+================================================================================
+5. PERFORMANCE METRICS
+================================================================================
+
+LOCATION: docs/performance_metrics.md
+PURPOSE: Measure and monitor pipeline performance
+
+
+UNDERSTANDING THROUGHPUT AND LATENCY:
+-------------------------------------
+
+THROUGHPUT = How many events can we process per unit of time?
+             Think of it like a RESTAURANT: How many orders can they serve per hour?
+
+             High throughput = Many events processed quickly
+             Low throughput = Few events processed
+
+LATENCY = How long does each individual event take from creation to storage?
+          Think of it like WAITING FOR YOUR FOOD: How long from ordering to receiving?
+
+          Low latency = Events processed quickly (fast food: 5 minutes)
+          High latency = Events wait a long time (fine dining: 45 minutes)
+
+
+ACTUAL TEST RESULTS:
+-------------------
+| Metric | Value | Explanation |
+|--------|-------|-------------|
+| Total Events | 9,040 | Total events stored in PostgreSQL |
+| Throughput (average) | 18.64 events/min | Average over entire test (includes downtime) |
+| Throughput (real-time) | 37 events/min | Actual rate when pipeline is running |
+| Average Latency | 150.33 seconds | Time from event creation to database |
+| Duplicates | 0 | 100% data integrity - no duplicates! |
+| View/Purchase Ratio | 70.6% / 29.4% | Matches expected 70/30 configuration |
+
+
+METRIC 1: THROUGHPUT (Events per Minute)
+----------------------------------------
+How many events flow through the pipeline per minute?
+
+SQL Query to measure REAL-TIME throughput (last 10 minutes):
+```sql
+SELECT 
+    COUNT(*) AS events,
+    ROUND(COUNT(*)::numeric / 10, 2) AS events_per_minute
+FROM user_events 
+WHERE ingested_at > NOW() - INTERVAL '10 minutes';
+```
+
+SQL Query to measure AVERAGE throughput (all time):
+```sql
+SELECT 
+    COUNT(*) AS total_events,
+    ROUND(COUNT(*)::numeric / NULLIF(EXTRACT(EPOCH FROM (MAX(ingested_at) - MIN(ingested_at))), 0) * 60, 2) AS events_per_minute
+FROM user_events;
+```
+
+WHY ARE THERE TWO VALUES?
+- Real-time (37/min): Actual throughput when pipeline is running continuously
+- Average (18.64/min): Lower because it includes periods when pipeline was stopped
+
+
+METRIC 2: LATENCY (End-to-End Delay)
+------------------------------------
+How long from event creation to database storage?
+
+SQL Query to measure:
+```sql
+SELECT 
+    ROUND(AVG(EXTRACT(EPOCH FROM (ingested_at - event_timestamp)))::numeric, 2) AS avg_latency_seconds,
+    ROUND(MAX(EXTRACT(EPOCH FROM (ingested_at - event_timestamp)))::numeric, 2) AS max_latency_seconds
+FROM user_events;
+```
+
+EXPLANATION:
+- event_timestamp: When the event "happened" (from generator)
+- ingested_at: When it was inserted in PostgreSQL
+- Difference = latency
+
+WHY IS LATENCY HIGH?
+Our average latency (150 seconds) is high because events accumulated during downtime:
+- Event created at 10:00:00
+- Pipeline was OFF (rebuilding Docker)
+- Pipeline restarted at 10:02:30
+- Event finally processed at 10:02:30
+- Latency = 150 seconds
+
+Under continuous operation, latency is typically < 15 seconds.
+
+
+METRIC 3: BATCH PROCESSING TIME
+-------------------------------
+How long does Spark take to process each micro-batch?
+
+Check the logs:
+```
+Batch 5: Processed 200 records, inserted 200 in 0.08s
+```
+
+This tells us:
+- Batch number (5)
+- Records processed (200)
+- Records inserted (200)
+- Time taken (0.08 seconds)
+
+
+METRIC 4: DUPLICATE RATE
+------------------------
+Are we handling duplicates correctly?
+
+SQL Query:
+```sql
+SELECT 
+    COUNT(*) AS total_rows,
+    COUNT(DISTINCT event_id) AS unique_event_ids,
+    COUNT(*) - COUNT(DISTINCT event_id) AS duplicates
+FROM user_events;
+```
+
+Our result: duplicates = 0
+This proves our deduplication strategy works perfectly!
+
+
+================================================================================
+6. TEST CASES
+================================================================================
+
+LOCATION: docs/test_cases.md
+PURPOSE: Verify the pipeline works correctly
+
+
+TEST CASE 1: DATA GENERATOR OUTPUT
+----------------------------------
+WHAT WE'RE TESTING: The generator creates valid CSV files
+
+STEPS:
+1. Start the data generator
+2. Check /data/incoming/ for CSV files
+3. Open a CSV file and verify structure
+
+EXPECTED RESULT:
+- Files named like: events_20260129_100000_000001.csv
+- Contains header row: event_id,user_id,product_id,...
+- Data in correct format
+
+
+TEST CASE 2: SPARK FILE READING
+-------------------------------
+WHAT WE'RE TESTING: Spark reads CSV files correctly
+
+STEPS:
+1. Place a test CSV in /data/incoming/
+2. Check Spark logs for processing message
+3. Verify batch processing
+
+EXPECTED RESULT:
+- Log shows: "Batch X: Processed Y records"
+- No errors about corrupted files
+
+
+TEST CASE 3: DATA VALIDATION
+----------------------------
+WHAT WE'RE TESTING: Bad data is filtered out
+
+CREATE TEST DATA:
+- Invalid event_type: "click" (should be view/purchase)
+- Negative price: -50.00
+- Future timestamp: 2099-01-01
+
+EXPECTED RESULT:
+- Invalid records NOT in database
+- Valid records ARE in database
+
+
+TEST CASE 4: DUPLICATE HANDLING
+-------------------------------
+WHAT WE'RE TESTING: Same event_id is not inserted twice
+
+STEPS:
+1. Insert a record manually with event_id X
+2. Let Spark try to insert same event_id X
+3. Query database for event_id X
+
+EXPECTED RESULT:
+- Only 1 record with event_id X
+- No errors in logs
+
+
+TEST CASE 5: FAULT TOLERANCE (CHECKPOINTING)
+-------------------------------------------
+WHAT WE'RE TESTING: System recovers from crashes
+
+STEPS:
+1. Start pipeline, let it process some files
+2. Force stop Spark (docker stop spark-master)
+3. Restart Spark (docker start spark-master)
+4. Verify it resumes (doesn't reprocess old files)
+
+EXPECTED RESULT:
+- No duplicate data after restart
+- Processing continues from last checkpoint
+
+
+TEST CASE 6: DATABASE CONNECTION RETRY
+--------------------------------------
+WHAT WE'RE TESTING: Handles temporary database outages
+
+STEPS:
+1. Start pipeline normally
+2. Stop PostgreSQL (docker stop postgres)
+3. Wait 10 seconds
+4. Restart PostgreSQL (docker start postgres)
+5. Check Spark logs
+
+EXPECTED RESULT:
+- Logs show retry attempts: "Retrying in X seconds..."
+- Eventually reconnects without crashing
+- No data loss
+
+
+================================================================================
+7. HOW EVERYTHING WORKS TOGETHER
+================================================================================
+
+THE COMPLETE FLOW:
+-----------------
+
+1. DATA GENERATOR (Every 5 seconds)
+   ↓
+   Creates 100 fake e-commerce events
+   ↓
+   Writes to CSV file: /data/incoming/events_20260129_100000_000001.csv
+   ↓
+
+2. SPARK STREAMING (Every 10 seconds)
+   ↓
+   Monitors /data/incoming/ for new files
+   ↓
+   Reads CSV files (up to 5 per trigger)
+   ↓
+   Validates and cleans data (removes bad records)
+   ↓
+   Calls write_to_postgres() for each micro-batch
+   ↓
+
+3. DATABASE UTILITIES
+   ↓
+   Collects records from Spark
+   ↓
+   Performs batch INSERT with ON CONFLICT DO NOTHING
+   ↓
+   Commits transaction (or rollbacks on failure)
+   ↓
+
+4. POSTGRESQL
+   ↓
+   Stores events in user_events table
+   ↓
+   Skips duplicates automatically
+   ↓
+   Ready for querying/analytics!
+
+
+DOCKER CONTAINER ARCHITECTURE:
+-----------------------------
+
+┌─────────────────────────────────────────────────────────────────┐
+│                     Docker Network                               │
+│                                                                  │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐         │
+│  │   postgres  │    │    data-    │    │   spark-    │         │
+│  │  container  │←───│  generator  │───→│   master    │         │
+│  │             │    │  container  │    │  container  │         │
+│  └─────────────┘    └─────────────┘    └─────────────┘         │
+│        ↑                  │                   │                 │
+│        │                  ↓                   │                 │
+│        │         ┌─────────────┐              │                 │
+│        │         │ Shared Vol  │              │                 │
+│        │         │ /data/      │←─────────────┘                 │
+│        │         │ incoming/   │                                │
+│        │         └─────────────┘                                │
+│        │                                                        │
+│        └────────────────────────────────────────────────────────│
+│                    PostgreSQL connection                         │
+└─────────────────────────────────────────────────────────────────┘
+
+
+SUMMARY OF KEY CONCEPTS:
+------------------------
+
+1. DETERMINISTIC IDS
+   - Same input → same output
+   - Enables duplicate detection
+
+2. ATOMIC OPERATIONS
+   - All or nothing
+   - Prevents partial writes
+
+3. CHECKPOINTING
+   - Saves progress
+   - Enables crash recovery
+
+4. EXPONENTIAL BACKOFF
+   - Increasing wait times
+   - Handles temporary failures
+
+5. UPSERT (ON CONFLICT DO NOTHING)
+   - Prevents duplicates
+   - Idempotent operations
+
+6. FOREACHBATCH
+   - Custom sink for PostgreSQL
+   - Full control over write logic
+
+7. SCHEMA ENFORCEMENT
+   - Explicit data types
+   - Catches errors early
+
+
+================================================================================
+END OF DOCUMENT
+================================================================================
+
+This document was prepared for code review.
+Project: Real-Time Spark Streaming Pipeline
+Date: 2026-01-29
+
+For questions about the code, refer to the source files in:
+- src/data_generator.py
+- src/spark_streaming_to_postgres.py
+- src/utils/db_utils.py
+- docs/performance_metrics.md
+- docs/test_cases.md

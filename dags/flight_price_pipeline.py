@@ -8,6 +8,15 @@ This DAG orchestrates the complete data pipeline for Bangladesh flight price ana
 
 Technologies: Airflow, MySQL, PostgreSQL, dbt
 Architecture: Medallion (Bronze -> Silver -> Gold)
+
+LOAD MODES (via DAG params):
+- Full Load (default): Truncates tables and reloads all data with row hashes
+- Incremental Load: Only inserts records with new row hashes (skips existing)
+
+To trigger in incremental mode, use:
+    airflow dags trigger flight_price_pipeline --conf '{"load_mode": "incremental"}'
+    
+Or via the Airflow UI, add {"load_mode": "incremental"} to the trigger params.
 """
 
 from datetime import datetime, timedelta

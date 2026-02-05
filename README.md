@@ -9,9 +9,9 @@ This project implements the **Medallion Architecture** (Bronze → Silver → Go
 ```
 ┌─────────────┐     ┌─────────────────┐     ┌─────────────────────────────────────────┐
 │   CSV File  │────▶│  MySQL Staging  │────▶│           PostgreSQL Analytics          │
-│   (Source)  │     │  (Validation)   │     │ ┌─────────┐ ┌─────────┐ ┌─────────────┐ │
-└─────────────┘     └─────────────────┘     │ │ Bronze  │▶│ Silver  │▶│    Gold     │ │
-                                            │ │  Raw    │ │ Dims/   │ │    KPIs     │ │
+│   (Source)  │     │  (Validation +  │     │ ┌─────────┐ ┌─────────┐ ┌─────────────┐ │
+└─────────────┘     │  Row Hashing)   │     │ │ Bronze  │▶│ Silver  │▶│    Gold     │ │
+                    └─────────────────┘     │ │  Raw    │ │ Dims/   │ │    KPIs     │ │
                                             │ │  Data   │ │ Facts   │ │             │ │
                                             │ └─────────┘ └─────────┘ └─────────────┘ │
                                             └─────────────────────────────────────────┘
@@ -21,10 +21,23 @@ This project implements the **Medallion Architecture** (Bronze → Silver → Go
 
 | Layer | Database | Description |
 |-------|----------|-------------|
-| **Staging** | MySQL | Raw CSV ingestion with validation logging |
-| **Bronze** | PostgreSQL | Validated data with renamed columns (snake_case) |
+| **Staging** | MySQL | Raw CSV ingestion with validation logging + **row hashing** |
+| **Bronze** | PostgreSQL | Validated data with renamed columns + hash for change detection |
 | **Silver** | PostgreSQL | Clean data with dimensions and fact tables |
 | **Gold** | PostgreSQL | Business KPIs and analytics |
+
+##  Key Feature: Incremental Load Support
+
+This pipeline uses **row hashing** to efficiently handle both full and incremental loads:
+
+- **Row Hash**: MD5 hash generated from ALL 17 columns of each row
+- **Full Load**: Truncates tables and reloads all data (default)
+- **Incremental Load**: Only inserts records with new hash values (skips existing)
+
+### Why Hashing?
+- ✅ Detect new records without expensive column-by-column comparison
+- ✅ Skip existing records that haven't changed
+- ✅ Ensure data integrity with deterministic fingerprints
 
 ##  Prerequisites
 
@@ -53,10 +66,15 @@ docker-compose ps
 
 ### 3. Trigger the Pipeline
 
+**Full Load** (default - truncate and reload):
 ```bash
-# Unpause and trigger the DAG
 docker exec flight_airflow_webserver airflow dags unpause flight_price_pipeline
 docker exec flight_airflow_webserver airflow dags trigger flight_price_pipeline
+```
+
+**Incremental Load** (only insert new records):
+```bash
+docker exec flight_airflow_webserver airflow dags trigger flight_price_pipeline --conf '{"load_mode": "incremental"}'
 ```
 
 ## 📁 Project Structure
