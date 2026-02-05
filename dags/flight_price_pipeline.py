@@ -37,8 +37,8 @@ from transfer_to_bronze import run_transfer_to_bronze
 default_args = {
     'owner': 'airflow',
     'depends_on_past': False,
-    'email_on_failure': False,
-    'email_on_retry': False,
+    'email_on_failure': True,
+    'email_on_retry': True,
     'retries': 1,
     'retry_delay': timedelta(minutes=5),
 }
@@ -159,7 +159,7 @@ with DAG(
     default_args=default_args,
     description='End-to-end flight price analysis pipeline with Medallion architecture',
     schedule_interval=None,  # Manual trigger for now
-    start_date=datetime(2025, 1, 1),
+    start_date=datetime(2026, 1, 1),
     catchup=False,
     tags=['flight', 'analytics', 'medallion', 'dbt'],
     doc_md=__doc__,

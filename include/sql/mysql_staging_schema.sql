@@ -33,11 +33,12 @@ CREATE TABLE raw_flight_staging (
     ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
     -- Indexes for common queries
+    -- Index for fast hash lookups during incremental load
     INDEX idx_airline (`Airline`),
     INDEX idx_source (`Source`),
     INDEX idx_destination (`Destination`),
     INDEX idx_seasonality (`Seasonality`),
-    INDEX idx_row_hash (`row_hash`)            -- Index for fast hash lookups during incremental load
+    INDEX idx_row_hash (`row_hash`)            
 );
 
 -- Ingestion log table for tracking success/failure
