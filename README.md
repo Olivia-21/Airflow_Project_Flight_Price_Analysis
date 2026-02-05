@@ -35,9 +35,9 @@ This pipeline uses **row hashing** to efficiently handle both full and increment
 - **Incremental Load**: Only inserts records with new hash values (skips existing)
 
 ### Why Hashing?
-- ✅ Detect new records without expensive column-by-column comparison
-- ✅ Skip existing records that haven't changed
-- ✅ Ensure data integrity with deterministic fingerprints
+-  Detect new records without expensive column-by-column comparison
+-  Skip existing records that haven't changed
+-  Ensure data integrity with deterministic fingerprints
 
 ##  Prerequisites
 
